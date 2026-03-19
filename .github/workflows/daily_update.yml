@@ -1,0 +1,34 @@
+name: Auto Bus Data Fetcher
+
+on:
+  schedule:
+    # 毎日 日本時間 3:15に実行 (UTC 18:15)
+    - cron: '15 18 * * *'
+  workflow_dispatch: # ボタン一つで手動実行もできるようにする
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install requests pandas
+
+      - name: Run script
+        run: python main.py # ★あなたのPythonファイル名に合わせて変更してください
+
+      - name: Commit and Push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add .
+          git commit -m "Update bus data CSV [skip ci]" || echo "No changes to commit"
+          git push
