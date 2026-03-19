@@ -1,34 +1,44 @@
-name: Auto Bus Data Fetcher
+name: Auto Bus Data Fetcher (Every 15 min)
 
 on:
   schedule:
-    # 毎日 日本時間 3:15に実行 (UTC 18:15)
-    - cron: '15 18 * * *'
-  workflow_dispatch: # ボタン一つで手動実行もできるようにする
+    # 15分おきに実行 (UTC表記のため、JST 0:00, 0:15... と連動します)
+    - cron: '*/15 * * * *'
+  workflow_dispatch: # ボタン操作での手動実行も許可
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # タイムゾーンを日本に設定（ログの時間を日本時間に合わせる）
+    env:
+      TZ: 'Asia/Tokyo'
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # 最新版のv4を使用
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip' # 2回目以降の実行を高速化
 
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install requests pandas
 
       - name: Run script
-        run: python main.py # ★あなたのPythonファイル名に合わせて変更してください
+        # 実行時に現在時刻を表示するようにして、ログを確認しやすくしています
+        run: |
+          echo "Starting script at $(date)"
+          python main.py
 
       - name: Commit and Push changes
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
-          git commit -m "Update bus data CSV [skip ci]" || echo "No changes to commit"
+          # 変更がない場合にエラーにならないよう || exit 0 を追加
+          git commit -m "Update bus data: $(date +'%Y-%m-%d %H:%M:%S') [skip ci]" || exit 0
           git push
