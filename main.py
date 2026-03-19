@@ -4,7 +4,7 @@ import io
 import re
 import os
 import csv
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
 
 # --- 設定 ---
@@ -15,9 +15,10 @@ URLS = {
 }
 
 API_URL = "https://jik.nishitetsu.jp/jikoku/naviapp/busnavi"
-MAX_CONCURRENT_REQUESTS = 20
+# GitHub Actionsの環境に合わせて並列数を調整（10〜20程度が安定します）
+MAX_CONCURRENT_REQUESTS = 15
 
-# BUS_RANGES はご提示のものをそのまま使用
+# 車番の検索範囲
 BUS_RANGES = [
     (351, 352, 4), (371, 377, 3), (21, 26, 2), (27, 27, 3), (101, 107, 4),
     (201, 221, 4), (701, 704, 4), (2001, 2006, 4), (2010, 2010, 4), (2101, 2120, 4),
@@ -41,17 +42,20 @@ BUS_RANGES = [
 ]
 
 def get_target_date():
-    now = datetime.now()
+    """日本時間(JST)で日付を取得し、深夜3時までは前日扱いとする"""
+    jst = timezone(timedelta(hours=9))
+    now = datetime.now(jst)
     if now.hour < 3:
         now = now - timedelta(days=1)
     return now.strftime("%Y%m%d")
 
 def fetch_bus_info(bus_no):
+    """APIからバスの運行情報を取得"""
     params = {'bus_no': bus_no, 'lang': 'ja', 'site_cd': '0006', 'ver': '3'}
     try:
-        response = requests.get(API_URL, params=params, timeout=7)
+        # GitHub Actions環境を考慮しタイムアウトを少し長めに設定
+        response = requests.get(API_URL, params=params, timeout=10)
         if response.status_code == 200:
-            # APIが返した結果と一緒に、念のため問い合わせた車番(bus_no)も持たせる
             data = response.json()
             data['queried_bus_no'] = bus_no
             return data
@@ -60,20 +64,22 @@ def fetch_bus_info(bus_no):
     return None
 
 def load_master_data():
+    """外部の運用マスターCSVを読み込む"""
     master = {}
     for yobi_cd, url in URLS.items():
         try:
             response = requests.get(url)
             response.raise_for_status()
+            # 西鉄のCSVに合わせてCP932(Shift-JIS)でデコード
             csv_text = response.content.decode('cp932')
             df = pd.read_csv(io.StringIO(csv_text))
             for col in df.columns:
                 clean_col = str(col).strip()
+                # 運用番号 {xxxx-x} の抽出
                 codes = df[col].dropna().apply(lambda x: re.findall(r'\{(.*?)\}', str(x)))
                 for code_list in codes:
                     for code in code_list:
                         master[f"{yobi_cd}_{code}"] = clean_col
-            print(f"Loaded: {url}")
         except Exception as e:
             print(f"Error loading {url}: {e}")
     return master
@@ -87,9 +93,9 @@ def main():
         for i in range(start, end + 1):
             bus_numbers.append(str(i).zfill(digits))
 
-    results_to_save = []
+    new_results = []
+    print(f"Fetching data for {len(bus_numbers)} buses (Target Date: {target_date})...")
 
-    print(f"Fetching data for {len(bus_numbers)} buses...")
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_REQUESTS) as executor:
         futures = {executor.submit(fetch_bus_info, b_no): b_no for b_no in bus_numbers}
         
@@ -100,7 +106,6 @@ def main():
                 keito_cd = data.get("keito_cd")
                 bin_no = data.get("bin_no")
                 
-                # bus_noが空なら問い合わせた車番を使用
                 bus_no = data.get("bus_no")
                 if not bus_no or str(bus_no).strip() == "":
                     bus_no = data.get("queried_bus_no")
@@ -108,24 +113,19 @@ def main():
                 if yobi_cd and keito_cd and bin_no:
                     lookup_key = f"{yobi_cd}_{keito_cd}-{bin_no}"
                     if lookup_key in master_data:
-                        results_to_save.append({
+                        new_results.append({
                             "date": target_date,
                             "unyo": master_data[lookup_key],
-                            "bus_no": str(bus_no) # 明示的に文字列化
+                            "bus_no": str(bus_no)
                         })
 
-    if not results_to_save:
-        print("No matches found.")
-        return
+    # 今回の取得結果をDataFrame化
+    new_df = pd.DataFrame(new_results).astype(str)
 
+    # --- CSV保存 & マージ処理 ---
     file_path = f"{target_date}.csv"
-    new_df = pd.DataFrame(results_to_save)
-    # 型を文字列に固定
-    new_df = new_df.astype(str)
-
     if os.path.exists(file_path):
         try:
-            # 読み込み時もすべて文字列として扱う（dtype=str）
             existing_df = pd.read_csv(file_path, dtype=str)
             combined_df = pd.concat([existing_df, new_df]).drop_duplicates(subset=["date", "unyo", "bus_no"])
         except Exception:
@@ -133,14 +133,25 @@ def main():
     else:
         combined_df = new_df
 
-    # CSV保存時にすべての値を引用符で囲み、数値変換を防ぐ
+    # CSV出力
     combined_df.to_csv(
         file_path, 
         index=False, 
         encoding='utf-8-sig', 
-        quoting=csv.QUOTE_NONNUMERIC # 数値以外（全項目）を引用符で囲む
+        quoting=csv.QUOTE_NONNUMERIC
     )
-    print(f"Saved {len(combined_df)} records to {file_path}")
+
+    # --- JSON保存処理 (Webアプリ用) ---
+    # 常に最新状態を保持する 'latest.json' として出力
+    json_file_path = "latest.json"
+    combined_df.to_json(
+        json_file_path,
+        orient='records',
+        force_ascii=False,
+        indent=4
+    )
+
+    print(f"Update complete. CSV: {file_path}, JSON: {json_file_path}")
 
 if __name__ == "__main__":
     main()
