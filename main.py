@@ -9,9 +9,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 # --- 設定 ---
 URLS = {
-    "1": "https://raw.githubusercontent.com/sakuraps1134/naviapp/main/20260401_hei.csv",
-    "2": "https://raw.githubusercontent.com/sakuraps1134/naviapp/main/20260401_doyo.csv",
-    "3": "https://raw.githubusercontent.com/sakuraps1134/naviapp/main/20260401_nichi.csv"
+    "1": "https://raw.githubusercontent.com/sakuraps1134/naviapp/main/202607hei.csv",
+    "2": "https://raw.githubusercontent.com/sakuraps1134/naviapp/main/202607doyo.csv",
+    "3": "https://raw.githubusercontent.com/sakuraps1134/naviapp/main/202607nichi.csv"
 }
 
 API_URL = "https://jik.nishitetsu.jp/jikoku/naviapp/busnavi"
