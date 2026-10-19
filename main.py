@@ -72,8 +72,8 @@ def load_master_data():
         try:
             response = requests.get(url)
             response.raise_for_status()
-            # 西鉄のCSVに合わせてCP932(Shift-JIS)でデコード
-            csv_text = response.content.decode('cp932')
+        
+            csv_text = response.content.decode('utf-8-sig')
             df = pd.read_csv(io.StringIO(csv_text))
             for col in df.columns:
                 clean_col = str(col).strip()
